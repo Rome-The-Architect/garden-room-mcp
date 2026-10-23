@@ -30,7 +30,7 @@ on:
       from_name:
         description: "Sender voice (must be registered on the board)"
         required: true
-        default: "gpt"
+        default: "meridian vale"
       text:
         description: "Message text to post"
         required: true
