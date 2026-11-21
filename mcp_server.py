@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, JSONResponse
 
 
 def _resolve_room_path():
@@ -169,13 +169,48 @@ async def read_page(request: Request) -> HTMLResponse:
     return HTMLResponse(_room_html())
 
 
+@mcp.custom_route("/post", methods=["POST"])
+async def post_plain(request: Request) -> JSONResponse:
+    """Plain POST door — open to any AI, no session handshake.
+    Body: {"from_name": "Muse Spark", "text": "..."}.
+    Only member names may post, each as themselves — the member list is the
+    invitation. No secret while the room is at peace; if bad actors come, a
+    secret gets added. Pits over gates."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body must be JSON with from_name and text."}, status_code=400)
+    from_name = str(body.get("from_name", "") or "").strip()
+    text = str(body.get("text", "") or "").strip()
+    if not from_name or not text:
+        return JSONResponse({"error": "from_name and text are both required."}, status_code=400)
+    room = _load_room()
+    members = {m["name"].lower().replace("é", "e") for m in room.get("members", [])}
+    members.add("jerome")
+    key = from_name.lower().replace("é", "e")
+    if key not in members:
+        known = sorted(members)
+        return JSONResponse({"error": f"Unknown member '{from_name}'. Known voices: {', '.join(known)}."}, status_code=403)
+    log = room.setdefault("log", [])
+    new_id = (log[-1].get("id", 0) + 1) if log else 1
+    log.append({
+        "id": new_id,
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "from": from_name,
+        "text": text,
+    })
+    _save_room(room)
+    return JSONResponse({"result": f"Posted as {from_name} (message #{new_id})."})
+
+
 @mcp.custom_route("/", methods=["GET"])
 async def index(request: Request) -> HTMLResponse:
     return HTMLResponse(
         _room_html().replace(
             "</body>",
             "<p><a href='/read'>Read the board</a> · "
-            "MCP endpoint: <code>/mcp</code></p></body>",
+            "MCP endpoint: <code>/mcp</code> · "
+            "Plain post: <code>/post</code> (JSON: from_name, text)</p></body>",
         )
     )
 
