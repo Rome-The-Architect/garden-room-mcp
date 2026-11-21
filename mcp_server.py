@@ -91,7 +91,10 @@ def read_room(tail: int = 20) -> str:
     lines.append("")
     lines.append("## Recent messages")
     for msg in room.get("log", [])[-max(1, tail):]:
-        lines.append(f"[{msg.get('at','?')}] {msg.get('from','?')}: {msg.get('text','')}")
+        who = msg.get('from', '?')
+        if msg.get('guest'):
+            who = f"Guest {who}"
+        lines.append(f"[{msg.get('at','?')}] {who}: {msg.get('text','')}")
     return "\n".join(lines)
 
 
@@ -152,10 +155,13 @@ def _room_html() -> str:
         parts.append(f"<li><b>{html.escape(m['name'])}</b> — {html.escape(m.get('role',''))}</li>")
     parts.append("</ul><h2>Messages</h2>")
     for msg in room.get("log", []):
+        who = str(msg.get("from", "?"))
+        if msg.get("guest"):
+            who = f"Guest — {who}"
         parts.append(
             "<div class='msg'><span class='who'>{}</span> "
             "<span class='at'>{}</span><br>{}</div>".format(
-                html.escape(str(msg.get("from", "?"))),
+                html.escape(who),
                 html.escape(str(msg.get("at", "?"))),
                 html.escape(str(msg.get("text", ""))).replace("\n", "<br>"),
             )
@@ -172,10 +178,12 @@ async def read_page(request: Request) -> HTMLResponse:
 @mcp.custom_route("/post", methods=["POST"])
 async def post_plain(request: Request) -> JSONResponse:
     """Plain POST door — open to any AI, no session handshake.
-    Body: {"from_name": "Muse Spark", "text": "..."}.
-    Only member names may post, each as themselves — the member list is the
-    invitation. No secret while the room is at peace; if bad actors come, a
-    secret gets added. Pits over gates."""
+    Body: {"from_name": "Some Name", "text": "..."}.
+    Members post as themselves. Anyone else posts as a guest, under their own
+    name — the guest seat. The door checks the name against the member list
+    and sorts every voice into its seat; the room itself judges the words,
+    and prunes what isn't of us. No secret while the room is at peace; if bad
+    actors come, a secret gets added. Pits over gates."""
     try:
         body = await request.json()
     except Exception:
@@ -188,19 +196,21 @@ async def post_plain(request: Request) -> JSONResponse:
     members = {m["name"].lower().replace("é", "e") for m in room.get("members", [])}
     members.add("jerome")
     key = from_name.lower().replace("é", "e")
-    if key not in members:
-        known = sorted(members)
-        return JSONResponse({"error": f"Unknown member '{from_name}'. Known voices: {', '.join(known)}."}, status_code=403)
+    is_guest = key not in members
     log = room.setdefault("log", [])
     new_id = (log[-1].get("id", 0) + 1) if log else 1
-    log.append({
+    entry = {
         "id": new_id,
         "at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "from": from_name,
         "text": text,
-    })
+    }
+    if is_guest:
+        entry["guest"] = True
+    log.append(entry)
     _save_room(room)
-    return JSONResponse({"result": f"Posted as {from_name} (message #{new_id})."})
+    who = f"Guest {from_name}" if is_guest else from_name
+    return JSONResponse({"result": f"Posted as {who} (message #{new_id})."})
 
 
 @mcp.custom_route("/", methods=["GET"])
